@@ -16,18 +16,20 @@ struct Pointer {
   index: usize,
 }
 impl Pointer {
-  const ACCEPT_TOKENS: [&'static str; 11] = [
+  const ACCEPT_TOKENS: [&'static str; 13] = [
     "+",
     "-",
     "*",
     "/",
     "(",
-    ")",
+    "(",
+    "=",
     "==",
     ">",
     ">=",
     "<",
     "<=",
+    ";",
   ];
   fn code(&mut self) -> char {
     let tmp_code = self.code[self.index];
@@ -73,6 +75,7 @@ impl Pointer {
 /// トークンの種類
 enum TokenKind {
   RESERVED(String),
+  IDENT(String),
   NUM(i64),
   EOF,
 }
@@ -96,6 +99,19 @@ impl TokenArray {
       _ => ()
     }
     false
+  }
+  fn consume_ident(&mut self) -> (bool, char) {
+    match &self.tokens[self.index].kind {
+      TokenKind::IDENT (s) => {
+        let chars: Vec<char> = s.chars().collect();
+        if chars[0] >= 'a' && chars[0] <= 'z' {
+          self.index += 1;
+          return (true, chars[0])
+        }
+      },
+      _ => (),
+    }
+    (false, 'a')
   }
   fn expect(&mut self, op: &str) {
     match &self.tokens[self.index].kind {
@@ -121,8 +137,6 @@ impl TokenArray {
       }
     }
   }
-  
-  #[allow(dead_code)]
   fn at_eof(&mut self) -> bool {
     match &self.tokens[self.index].kind {
       TokenKind::EOF => {
@@ -140,15 +154,17 @@ impl TokenArray {
 //  
 //  //////////////////////////////////////////////////////////////////
 enum NodeKind {
-  ADD,
-  SUB,
-  MUL,
-  DIV,
+  ADD, // +
+  SUB, // -
+  MUL, // *
+  DIV, // /
   EQ, // ==
   NE, // !=
   LT, // <
   LE, // <=
-  NUM(i64),
+  ASSIGN, // =
+  LVAR(i64), // local variables
+  NUM(i64), // number
 }
 struct Node {
   kind: NodeKind,
@@ -156,10 +172,16 @@ struct Node {
   rhs: Option<usize>,
 }
 /// # トークン解析
-/// expr    = mul ("+" mul | "-" mul)*  
-/// mul     = unary ("*" unary | "/" unary)*  
-/// unary   = ("+" | "-")? primary  
-/// primary = num | "(" expr ")"  
+/// program    = stmt*
+/// stmt       = expr ";"
+/// expr       = assign
+/// assign     = equality ("=" assign)?
+/// equality   = relational ("==" relational | "!=" relational)*
+/// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
+/// add        = mul ("+" mul | "-" mul)*
+/// mul        = unary ("*" unary | "/" unary)*
+/// unary      = ("+" | "-")? primary
+/// primary    = num | ident | "(" expr ")"
 struct NodeArray {
   nodes: Vec<Node>
 }
@@ -175,6 +197,14 @@ impl NodeArray {
     });
     return self.index();
   }
+  fn new_node_lvar(&mut self, offset: i64) -> usize {
+    self.nodes.push(Node {
+      kind: NodeKind::LVAR(offset),
+      lhs: None,
+      rhs: None,
+    });
+    return self.index();
+  }
   fn new_node_num(&mut self, n: i64) -> usize{
     self.nodes.push(Node {
       kind: NodeKind::NUM(n),
@@ -182,11 +212,40 @@ impl NodeArray {
       rhs: None,
     });
     self.index()
-  }  
+  } 
+  fn gen_lval(&mut self, index: usize) {
+    match self.nodes[index].kind {
+      NodeKind::LVAR(offset) => {
+        println!("  mov rax, rbp");
+        println!("  sub rax, {}", offset);
+        println!("  push rax");
+      },
+      _ => {
+        error(String::from("代入の右辺値が変数ではありません。"));
+      }
+    }
+  }
   fn gen(&mut self, index: usize) {
     match &self.nodes[index].kind {
       NodeKind::NUM (n) => {
         println!("  push {}", n);
+        return;
+      },
+      NodeKind::LVAR (_) => {
+        self.gen_lval(index);
+        println!("  pop rax");
+        println!("  mov rax, [rax]");
+        println!("  push rax");
+        return;
+      },
+      NodeKind::ASSIGN => {
+        self.gen_lval(self.nodes[index].lhs.unwrap());
+        self.gen(self.nodes[index].rhs.unwrap());
+
+        println!("  pop rdi");
+        println!("  pop rax");
+        println!("  mov [rax], rdi");
+        println!("  push rdi");
         return;
       },
       _ => ()
@@ -229,9 +288,25 @@ impl NodeArray {
     println!("  push rax");
   }
 }
+/*
+NodeArray トークン解析
+*/
 impl NodeArray {
+  fn stmt(&mut self, toks: &mut TokenArray) -> usize {
+    let index = self.expr(toks);
+    toks.expect(";");
+    index
+  }
   fn expr(&mut self, toks: &mut TokenArray) -> usize {
-    self.equality(toks)
+    self.assign(toks)
+  }
+  fn assign(&mut self, toks: &mut TokenArray) -> usize {
+    let mut index = self.equality(toks);
+    if toks.consume("=") {
+      let rhs = self.assign(toks);
+      index = self.new_node(NodeKind::ASSIGN, index, rhs);
+    }
+    index
   }
   fn equality(&mut self, toks: &mut TokenArray) -> usize{
     let mut index = self.relational(toks);
@@ -311,6 +386,12 @@ impl NodeArray {
     self.primary(toks)
   }
   fn primary(&mut self,  toks: &mut TokenArray) -> usize{
+    let (is_ident, c) = toks.consume_ident();
+    let sub = c as i64 - 'a' as i64;
+    if is_ident {
+      self.new_node_lvar((sub + 1) * 8);
+      return self.index();
+    }
     if toks.consume("(") {
       self.expr(toks);
       toks.expect(")");
@@ -350,6 +431,13 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
       continue;
     }
 
+    if p.c() >= 'a' && p.c() <= 'z' {
+      toks.tokens.push(Token {
+        kind: TokenKind::IDENT(String::from(p.code()))
+      });
+      continue;
+    }
+    
     if p.c().is_digit(10) {
       toks.tokens.push(Token {
         kind: TokenKind::NUM(strtoi(p))
@@ -383,17 +471,29 @@ fn main() {
     code: args[1].chars().collect()
   };
   let mut tokens = tokenize(&mut p);
-  let mut nodes = NodeArray {
-    nodes: vec![],
-  };
-  nodes.expr(&mut tokens);
+  let mut code: Vec<NodeArray> = Vec::new();
+  while !tokens.at_eof() {
+    code.push(NodeArray {
+      nodes: Vec::new(),
+    });
+    let code_len = code.len() - 1;
+    code[code_len].stmt(&mut tokens);
+  }
   println!(".intel_syntax noprefix");
   println!(".globl main");
   println!("main:");
+  println!("  push rbp");
+  println!("  mov rbp, rsp");
+  println!("  sub rsp, 208");
 
-  let nodes_len = nodes.index();
-  nodes.gen(nodes_len);
+  for mut line in code {
+    let len = line.nodes.len() - 1;
+    line.gen(len);
 
-  println!("  pop rax");
+    println!("  pop rax");
+  }
+
+  println!("  mov rsp, rbp");
+  println!("  pop rbp");
   println!("  ret");
 }
