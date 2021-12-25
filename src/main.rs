@@ -16,27 +16,44 @@ struct Pointer {
   index: usize,
 }
 impl Pointer {
-  const ACCEPT_TOKENS: [char; 6] = [
-    '+',
-    '-',
-    '*',
-    '/',
-    '(',
-    ')',
+  const ACCEPT_TOKENS: [&'static str; 11] = [
+    "+",
+    "-",
+    "*",
+    "/",
+    "(",
+    ")",
+    "==",
+    ">",
+    ">=",
+    "<",
+    "<=",
   ];
   fn code(&mut self) -> char {
     let tmp_code = self.code[self.index];
     self.index += 1;
     tmp_code
   }
-  fn check_token(&mut self) -> bool{
-    let mut is_accept = false;
-    for token in Self::ACCEPT_TOKENS {
-      if self.c() == token {
-        is_accept = true;
+  fn token_cmp(&mut self, token: &str) -> bool {
+    let mut is_accept = true;
+    let token_chars: Vec<char> = token.chars().collect();
+    for i in 0..token_chars.len() {
+      if self.code.len() != self.index + i && self.code[self.index + i] != token_chars[i] {
+        is_accept = false;
       }
     }
     is_accept
+  }
+  fn check_token(&mut self) -> (bool, &str) {
+    let mut is_accept = false;
+    let mut tok = "";
+    for token in Self::ACCEPT_TOKENS {
+      if self.token_cmp(token) {
+        is_accept = true;
+        tok = token;
+      }
+    }
+    (is_accept, tok)
   }
   fn c(&mut self) -> char {
     self.code[self.index]
@@ -68,11 +85,10 @@ struct TokenArray {
   index: usize,
 }
 impl TokenArray {
-  fn consume(&mut self, op: char) -> bool{
+  fn consume(&mut self, op: &str) -> bool{
     match &self.tokens[self.index].kind {
       TokenKind::RESERVED (s) => {
-        let chars: Vec<char> = s.chars().collect();
-        if chars[0] == op {
+        if s == op {
           self.index += 1;
           return true;
         }
@@ -81,11 +97,10 @@ impl TokenArray {
     }
     false
   }
-  fn expect(&mut self, op: char) {
+  fn expect(&mut self, op: &str) {
     match &self.tokens[self.index].kind {
       TokenKind::RESERVED (s) => {
-        let chars: Vec<char> = s.chars().collect();
-        if chars[0] == op {
+        if s == op {
           self.index += 1;
           return
         }
@@ -129,6 +144,10 @@ enum NodeKind {
   SUB,
   MUL,
   DIV,
+  EQ, // ==
+  NE, // !=
+  LT, // <
+  LE, // <=
   NUM(i64),
 }
 struct Node {
@@ -184,6 +203,26 @@ impl NodeArray {
       NodeKind::SUB => println!("  sub rax, rdi"),
       NodeKind::MUL => println!("  imul rax, rdi"),
       NodeKind::DIV => { println!("  cqo"); println!("  idiv rdi") },
+      NodeKind::EQ => {
+        println!("  cmp rax, rdi");
+        println!("  sete al");
+        println!("  movzb rax, al");
+      },
+      NodeKind::NE => {
+        println!("  cmp rax, rdi");
+        println!("  setne al");
+        println!("  movzb rax, al");
+      },
+      NodeKind::LT => {
+        println!("  cmp rax, rdi");
+        println!("  setl al");
+        println!("  movzb rax, al");
+      },
+      NodeKind::LE => {
+        println!("  cmp rax, rdi");
+        println!("  setle al");
+        println!("  movzb rax, al");
+      },
       _ => ()
     }
 
@@ -192,13 +231,52 @@ impl NodeArray {
 }
 impl NodeArray {
   fn expr(&mut self, toks: &mut TokenArray) -> usize {
-    let mut index =  self.mul(toks);
+    self.equality(toks)
+  }
+  fn equality(&mut self, toks: &mut TokenArray) -> usize{
+    let mut index = self.relational(toks);
 
     loop {
-      if toks.consume('+') {
+      if toks.consume("==") {
+        let rhs = self.relational(toks);
+        index = self.new_node(NodeKind::EQ, index, rhs);
+      } else if toks.consume("!=") {
+        let rhs = self.relational(toks);
+        index = self.new_node(NodeKind::NE, index, rhs);
+      } else {
+        return index
+      }
+    }
+  }
+  fn relational(&mut self, toks: &mut TokenArray) -> usize {
+    let mut index = self.add(toks);
+
+    loop {
+      if toks.consume("<") {
+        let rhs = self.add(toks);
+        index = self.new_node(NodeKind::LT, index, rhs);
+      } else if toks.consume("<=") {
+        let rhs = self.add(toks);
+        index = self.new_node(NodeKind::LE, index, rhs);
+      } else if toks.consume(">") {
+        let rhs = self.add(toks);
+        index = self.new_node(NodeKind::LT, rhs, index);
+      } else if toks.consume(">=") {
+        let rhs = self.add(toks);
+        index = self.new_node(NodeKind::LE, rhs, index);
+      } else {
+        return index;
+      }
+    }
+  }
+  fn add(&mut self, toks: &mut TokenArray) -> usize {
+    let mut index = self.mul(toks);
+
+    loop {
+      if toks.consume("+") {
         let rhs = self.mul(toks);
         index = self.new_node(NodeKind::ADD, index, rhs);
-      } else if toks.consume('-') {
+      } else if toks.consume("-") {
         let rhs = self.mul(toks);
         index = self.new_node(NodeKind::SUB, index, rhs);
       } else {
@@ -210,10 +288,10 @@ impl NodeArray {
     let mut index = self.unary(toks);
 
     loop {
-      if toks.consume('*') {
+      if toks.consume("*") {
         let rhs = self.unary(toks);
         index = self.new_node(NodeKind::MUL, index, rhs);
-      } else if toks.consume('/') {
+      } else if toks.consume("/") {
         let rhs = self.unary(toks);
         index = self.new_node(NodeKind::DIV, index, rhs);
       } else {
@@ -222,10 +300,10 @@ impl NodeArray {
     }
   }
   fn unary(&mut self, toks: &mut TokenArray) -> usize {
-    if toks.consume('+') {
+    if toks.consume("+") {
       return self.primary(toks);
     }
-    if toks.consume('-') {
+    if toks.consume("-") {
       let lhs = self.new_node_num(0);
       let rhs = self.primary(toks);
       return self.new_node(NodeKind::SUB, lhs, rhs);
@@ -233,9 +311,9 @@ impl NodeArray {
     self.primary(toks)
   }
   fn primary(&mut self,  toks: &mut TokenArray) -> usize{
-    if toks.consume('(') {
+    if toks.consume("(") {
       self.expr(toks);
-      toks.expect(')');
+      toks.expect(")");
       return self.index();
     }
     self.new_node_num(toks.expect_number());
@@ -263,10 +341,12 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
       continue;
     }
 
-    if p.check_token() {
+    let (is_accept, tok) = p.check_token();
+    if is_accept {
       toks.tokens.push(Token {
-        kind: TokenKind::RESERVED(String::from(p.code()))
+        kind: TokenKind::RESERVED(String::from(tok))
       });
+      p.index += tok.len();
       continue;
     }
 
