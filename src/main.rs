@@ -40,11 +40,20 @@ impl Pointer {
     let mut is_accept = true;
     let token_chars: Vec<char> = token.chars().collect();
     for i in 0..token_chars.len() {
+      if self.code.len() == self.index + i {
+        return false;
+      }
       if self.code.len() != self.index + i && self.code[self.index + i] != token_chars[i] {
         is_accept = false;
       }
     }
     is_accept
+  }
+  fn is_alnum(&mut self, c: char) -> bool {
+    ('a' <= c && c <= 'z') ||
+    ('A' <= c && c <= 'Z') ||
+    ('0' <= c && c <= '9') ||
+    (c == '_')
   }
   fn check_token(&mut self) -> (bool, &str) {
     let mut is_accept = false;
@@ -78,9 +87,11 @@ struct LVar{
 //  
 //  //////////////////////////////////////////////////////////////////
 /// トークンの種類
+#[derive(Debug)]
 enum TokenKind {
   RESERVED(String),
   IDENT(String),
+  RETURN,
   NUM(i64),
   EOF,
 }
@@ -182,6 +193,7 @@ enum NodeKind {
   ASSIGN, // =
   LVAR(LVar), // local variables
   NUM(i64), // number
+  RETURN, // return
 }
 struct Node {
   kind: NodeKind,
@@ -190,7 +202,7 @@ struct Node {
 }
 /// # トークン解析
 /// program    = stmt*
-/// stmt       = expr ";"
+/// stmt       = expr ";" | "return" expr ";"
 /// expr       = assign
 /// assign     = equality ("=" assign)?
 /// equality   = relational ("==" relational | "!=" relational)*
@@ -232,7 +244,15 @@ impl NodeArray {
       rhs: None,
     });
     self.index()
-  } 
+  }
+  fn new_node_only_lhs(&mut self, kind: NodeKind, lhs: usize) -> usize {
+    self.nodes.push(Node {
+      kind: kind,
+      lhs: Some(lhs),
+      rhs: None,
+    });
+    self.index()
+  }
   fn gen_lval(&mut self, index: usize) {
     match &self.nodes[index].kind {
       NodeKind::LVAR(lvar) => {
@@ -268,6 +288,14 @@ impl NodeArray {
         println!("  push rdi");
         return;
       },
+      NodeKind::RETURN => {
+        self.gen(self.nodes[index].lhs.unwrap());
+        println!("  pop rax");
+        println!("  mov rsp, rbp");
+        println!("  pop rbp");
+        println!("  ret");
+        return;
+      }
       _ => ()
     }
 
@@ -313,8 +341,22 @@ NodeArray トークン解析
 */
 impl NodeArray {
   fn stmt(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
-    let index = self.expr(toks, lvars);
-    toks.expect(";");
+    let mut index;
+
+    match toks.tokens[toks.index].kind {
+      TokenKind::RETURN => {
+        toks.index += 1;
+        let lhs = self.expr(toks, lvars);
+        index = self.new_node_only_lhs(NodeKind::RETURN, lhs);
+      },
+      _ => {
+        index = self.expr(toks, lvars);
+      }
+    }
+
+    if !toks.consume(";") {
+      error(String::from("';'ではないトークンです"));
+    }
     index
   }
   fn expr(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
@@ -458,11 +500,13 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
     index: 0,
   };
   while !p.is_out() {
+    // 空白
     if p.c() == ' ' {
       p.index += 1;
       continue;
     }
 
+    // 記号
     let (is_accept, tok) = p.check_token();
     if is_accept {
       toks.tokens.push(Token {
@@ -472,6 +516,16 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
       continue;
     }
 
+    // return
+    if p.token_cmp("return") && !p.is_alnum(p.code[p.index + 6]) {
+      toks.tokens.push(Token {
+        kind: TokenKind::RETURN,
+      });
+      p.index += 6;
+      continue;
+    }
+
+    // 変数
     if p.c() >= 'a' && p.c() <= 'z' {
       let mut r = String::from("");
       loop {
@@ -487,6 +541,7 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
       continue;
     }
     
+    // 数字
     if p.c().is_digit(10) {
       toks.tokens.push(Token {
         kind: TokenKind::NUM(strtoi(p))
@@ -494,6 +549,7 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
       continue;
     }
 
+    println!("{}", p.c());
     error(String::from("トークナイズできません"));
   }
 
