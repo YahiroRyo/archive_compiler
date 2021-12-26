@@ -31,5 +31,6 @@ assert 0 "3 <= 2;"
 assert 0 "1 == 2;"
 assert 1 "3 == 3;"
 assert 17 "a = 6 + 11; a;"
+assert 17 "foo = 6 + 11; foo;"
 
 echo OK

@@ -67,6 +67,11 @@ impl Pointer {
   }
 }
 
+struct LVar{
+  name: String,
+  offset: i64,
+}
+
 //  //////////////////////////////////////////////////////////////////
 //  
 //  token
@@ -100,18 +105,15 @@ impl TokenArray {
     }
     false
   }
-  fn consume_ident(&mut self) -> (bool, char) {
+  fn consume_ident(&mut self) -> (bool, String) {
     match &self.tokens[self.index].kind {
       TokenKind::IDENT (s) => {
-        let chars: Vec<char> = s.chars().collect();
-        if chars[0] >= 'a' && chars[0] <= 'z' {
-          self.index += 1;
-          return (true, chars[0])
-        }
+        self.index += 1;
+        return (true, s.to_string())
       },
       _ => (),
     }
-    (false, 'a')
+    (false, String::from("None"))
   }
   fn expect(&mut self, op: &str) {
     match &self.tokens[self.index].kind {
@@ -136,6 +138,21 @@ impl TokenArray {
         0
       }
     }
+  }
+  fn find_lvar(&mut self, lvars: &mut Vec<LVar>) -> (bool, usize) {
+    match &self.tokens[self.index].kind {
+      TokenKind::IDENT(s) => {
+        for i in 0..lvars.len() {
+          if s.to_string() == lvars[i].name {
+            self.index += 1;
+            return (true, i);
+          }
+        }
+      },
+      _ => ()
+    }
+    self.index += 1;
+    (false, 0)
   }
   fn at_eof(&mut self) -> bool {
     match &self.tokens[self.index].kind {
@@ -163,7 +180,7 @@ enum NodeKind {
   LT, // <
   LE, // <=
   ASSIGN, // =
-  LVAR(i64), // local variables
+  LVAR(LVar), // local variables
   NUM(i64), // number
 }
 struct Node {
@@ -197,9 +214,12 @@ impl NodeArray {
     });
     return self.index();
   }
-  fn new_node_lvar(&mut self, offset: i64) -> usize {
+  fn new_node_lvar(&mut self, name: String, offset: i64) -> usize {
     self.nodes.push(Node {
-      kind: NodeKind::LVAR(offset),
+      kind: NodeKind::LVAR(LVar {
+        name: name,
+        offset: offset,
+      }),
       lhs: None,
       rhs: None,
     });
@@ -214,10 +234,10 @@ impl NodeArray {
     self.index()
   } 
   fn gen_lval(&mut self, index: usize) {
-    match self.nodes[index].kind {
-      NodeKind::LVAR(offset) => {
+    match &self.nodes[index].kind {
+      NodeKind::LVAR(lvar) => {
         println!("  mov rax, rbp");
-        println!("  sub rax, {}", offset);
+        println!("  sub rax, {}", lvar.offset);
         println!("  push rax");
       },
       _ => {
@@ -292,108 +312,129 @@ impl NodeArray {
 NodeArray トークン解析
 */
 impl NodeArray {
-  fn stmt(&mut self, toks: &mut TokenArray) -> usize {
-    let index = self.expr(toks);
+  fn stmt(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
+    let index = self.expr(toks, lvars);
     toks.expect(";");
     index
   }
-  fn expr(&mut self, toks: &mut TokenArray) -> usize {
-    self.assign(toks)
+  fn expr(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
+    self.assign(toks, lvars)
   }
-  fn assign(&mut self, toks: &mut TokenArray) -> usize {
-    let mut index = self.equality(toks);
+  fn assign(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
+    let mut index = self.equality(toks, lvars);
     if toks.consume("=") {
-      let rhs = self.assign(toks);
+      let rhs = self.assign(toks, lvars);
       index = self.new_node(NodeKind::ASSIGN, index, rhs);
     }
     index
   }
-  fn equality(&mut self, toks: &mut TokenArray) -> usize{
-    let mut index = self.relational(toks);
+  fn equality(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize{
+    let mut index = self.relational(toks, lvars);
 
     loop {
       if toks.consume("==") {
-        let rhs = self.relational(toks);
+        let rhs = self.relational(toks, lvars);
         index = self.new_node(NodeKind::EQ, index, rhs);
       } else if toks.consume("!=") {
-        let rhs = self.relational(toks);
+        let rhs = self.relational(toks, lvars);
         index = self.new_node(NodeKind::NE, index, rhs);
       } else {
         return index
       }
     }
   }
-  fn relational(&mut self, toks: &mut TokenArray) -> usize {
-    let mut index = self.add(toks);
+  fn relational(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
+    let mut index = self.add(toks, lvars);
 
     loop {
       if toks.consume("<") {
-        let rhs = self.add(toks);
+        let rhs = self.add(toks, lvars);
         index = self.new_node(NodeKind::LT, index, rhs);
       } else if toks.consume("<=") {
-        let rhs = self.add(toks);
+        let rhs = self.add(toks, lvars);
         index = self.new_node(NodeKind::LE, index, rhs);
       } else if toks.consume(">") {
-        let rhs = self.add(toks);
+        let rhs = self.add(toks, lvars);
         index = self.new_node(NodeKind::LT, rhs, index);
       } else if toks.consume(">=") {
-        let rhs = self.add(toks);
+        let rhs = self.add(toks, lvars);
         index = self.new_node(NodeKind::LE, rhs, index);
       } else {
         return index;
       }
     }
   }
-  fn add(&mut self, toks: &mut TokenArray) -> usize {
-    let mut index = self.mul(toks);
+  fn add(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
+    let mut index = self.mul(toks, lvars);
 
     loop {
       if toks.consume("+") {
-        let rhs = self.mul(toks);
+        let rhs = self.mul(toks, lvars);
         index = self.new_node(NodeKind::ADD, index, rhs);
       } else if toks.consume("-") {
-        let rhs = self.mul(toks);
+        let rhs = self.mul(toks, lvars);
         index = self.new_node(NodeKind::SUB, index, rhs);
       } else {
         return index;
       }
     }
   }
-  fn mul(&mut self, toks: &mut TokenArray) -> usize {
-    let mut index = self.unary(toks);
+  fn mul(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
+    let mut index = self.unary(toks, lvars);
 
     loop {
       if toks.consume("*") {
-        let rhs = self.unary(toks);
+        let rhs = self.unary(toks, lvars);
         index = self.new_node(NodeKind::MUL, index, rhs);
       } else if toks.consume("/") {
-        let rhs = self.unary(toks);
+        let rhs = self.unary(toks, lvars);
         index = self.new_node(NodeKind::DIV, index, rhs);
       } else {
         return index;
       }
     }
   }
-  fn unary(&mut self, toks: &mut TokenArray) -> usize {
+  fn unary(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
     if toks.consume("+") {
-      return self.primary(toks);
+      return self.primary(toks, lvars);
     }
     if toks.consume("-") {
       let lhs = self.new_node_num(0);
-      let rhs = self.primary(toks);
+      let rhs = self.primary(toks, lvars);
       return self.new_node(NodeKind::SUB, lhs, rhs);
     }
-    self.primary(toks)
+    self.primary(toks, lvars)
   }
-  fn primary(&mut self,  toks: &mut TokenArray) -> usize{
-    let (is_ident, c) = toks.consume_ident();
-    let sub = c as i64 - 'a' as i64;
+  fn primary(&mut self,  toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize{
+    let (is_ident, s) = toks.consume_ident();
+
     if is_ident {
-      self.new_node_lvar((sub + 1) * 8);
+      toks.index -= 1;
+      let (is_exist, index) = toks.find_lvar(lvars);
+      if is_exist {
+        // すでに存在する
+        self.new_node_lvar(s, lvars[index].offset);
+      } else {
+        // 存在しない
+        let tmp = s.clone();
+        if lvars.len() == 0 {
+          self.new_node_lvar(s, 8);
+          lvars.push(LVar {
+            name: tmp,
+            offset: 8,
+          });
+        } else {
+          self.new_node_lvar(s, lvars[lvars.len() - 1].offset + 8);
+          lvars.push(LVar {
+            name: tmp,
+            offset: lvars[lvars.len() - 1].offset + 8,
+          });
+        }
+      }
       return self.index();
     }
     if toks.consume("(") {
-      self.expr(toks);
+      self.expr(toks, lvars);
       toks.expect(")");
       return self.index();
     }
@@ -432,8 +473,16 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
     }
 
     if p.c() >= 'a' && p.c() <= 'z' {
+      let mut r = String::from("");
+      loop {
+        if p.c() >= 'a' && p.c() <= 'z' {
+          r.push(p.code());
+        } else {
+          break;
+        }
+      }
       toks.tokens.push(Token {
-        kind: TokenKind::IDENT(String::from(p.code()))
+        kind: TokenKind::IDENT(r)
       });
       continue;
     }
@@ -472,12 +521,13 @@ fn main() {
   };
   let mut tokens = tokenize(&mut p);
   let mut code: Vec<NodeArray> = Vec::new();
+  let mut lvars: Vec<LVar> = Vec::new();
   while !tokens.at_eof() {
     code.push(NodeArray {
       nodes: Vec::new(),
     });
     let code_len = code.len() - 1;
-    code[code_len].stmt(&mut tokens);
+    code[code_len].stmt(&mut tokens, &mut lvars);
   }
   println!(".intel_syntax noprefix");
   println!(".globl main");
