@@ -22,7 +22,7 @@ impl Pointer {
     "*",
     "/",
     "(",
-    "(",
+    ")",
     "=",
     "==",
     ">",
@@ -193,6 +193,7 @@ enum NodeKind {
   ASSIGN, // =
   LVAR(LVar), // local variables
   NUM(i64), // number
+  IF,
   RETURN, // return
 }
 struct Node {
@@ -295,6 +296,15 @@ impl NodeArray {
         println!("  pop rbp");
         println!("  ret");
         return;
+      },
+      NodeKind::IF => {
+        self.gen(self.nodes[index].lhs.unwrap());
+        println!("  pop rax");
+        println!("  cmp rax, 0");
+        println!("  je  .Lendxxx");
+        self.gen(self.nodes[index].rhs.unwrap());
+        println!(".Lendxxx:");
+        return;
       }
       _ => ()
     }
@@ -341,9 +351,19 @@ NodeArray トークン解析
 */
 impl NodeArray {
   fn stmt(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
-    let mut index;
+    let mut index = 0;
 
-    match toks.tokens[toks.index].kind {
+    match &toks.tokens[toks.index].kind {
+      TokenKind::RESERVED(s) => {
+        if s == "if" {
+          toks.index += 1;
+          toks.expect("(");
+          let lhs = self.expr(toks, lvars);
+          toks.expect(")");
+          let rhs = self.stmt(toks, lvars);
+          return self.new_node(NodeKind::IF, lhs, rhs);
+        }
+      },
       TokenKind::RETURN => {
         toks.index += 1;
         let lhs = self.expr(toks, lvars);
@@ -525,6 +545,14 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
       continue;
     }
 
+    // if
+    if p.token_cmp("if") {
+      toks.tokens.push(Token {
+        kind: TokenKind::RESERVED(String::from("if")),
+      });
+      p.index += 2;
+      continue;
+    }
     // 変数
     if p.c() >= 'a' && p.c() <= 'z' {
       let mut r = String::from("");
@@ -548,8 +576,6 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
       });
       continue;
     }
-
-    println!("{}", p.c());
     error(String::from("トークナイズできません"));
   }
 
