@@ -195,6 +195,7 @@ enum NodeKind {
   IF,
   ELSE,
   RETURN, // return
+  NONE,
 }
 struct Node {
   kind: NodeKind,
@@ -300,14 +301,27 @@ impl NodeArray {
         return;
       },
       NodeKind::IF => {
-        self.gen(self.nodes[index].lhs.unwrap());
+        let if_node = self.nodes[index].lhs.unwrap();
+        let else_node = self.nodes[index].rhs;
+        self.gen(self.nodes[if_node].lhs.unwrap());
         println!("  pop rax");
         println!("  cmp rax, 0");
-        println!("  je  .Lendxxx");
-        self.gen(self.nodes[index].rhs.unwrap());
+        if else_node != None {
+          println!("  je  .Lelsexxx");
+          self.gen(self.nodes[if_node].rhs.unwrap());
+          println!("  jmp .Lendxxx");
+          println!(".Lelsexxx:");
+          let else_node_lhs = self.nodes[else_node.unwrap()].lhs.unwrap();
+          self.gen(else_node_lhs);
+        } else {
+          println!("  je  .Lendxxx");
+          self.gen(self.nodes[if_node].rhs.unwrap());
+        }
         println!(".Lendxxx:");
         return;
       }
+      NodeKind::ELSE => return,
+      NodeKind::NONE => return,
       _ => ()
     }
 
@@ -357,11 +371,18 @@ impl NodeArray {
 
     if toks.consume("if") {
       toks.expect("(");
-      let lhs = self.expr(toks, lvars);
+      let none_lhs = self.expr(toks, lvars);
       toks.expect(")");
-      let rhs = self.stmt(toks, lvars);
-      return self.new_node(NodeKind::IF, lhs, rhs);
+      let none_rhs = self.stmt(toks, lvars);
+      let lhs = self.new_node(NodeKind::NONE, none_lhs, none_rhs);
+      if toks.consume("else") {
+        let else_lhs = self.stmt(toks, lvars);
+        let rhs = self.new_node_only_lhs(NodeKind::ELSE, else_lhs);
+        return self.new_node(NodeKind::IF, lhs, rhs);
+      }
+      return self.new_node_only_lhs(NodeKind::IF, lhs);
     }
+    
     if toks.consume("return") {
       let lhs = self.expr(toks, lvars);
       index = self.new_node_only_lhs(NodeKind::RETURN, lhs);
@@ -464,7 +485,6 @@ impl NodeArray {
   }
   fn primary(&mut self,  toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize{
     let (is_ident, s) = toks.consume_ident();
-
     if is_ident {
       toks.index -= 1;
       let (is_exist, index) = toks.find_lvar(lvars);
@@ -546,6 +566,13 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
         kind: TokenKind::RESERVED(String::from("if")),
       });
       p.index += 2;
+      continue;
+    }
+    if p.token_cmp("else") {
+      toks.tokens.push(Token {
+        kind: TokenKind::RESERVED(String::from("else")),
+      });
+      p.index += 4;
       continue;
     }
     // 変数

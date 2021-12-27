@@ -37,5 +37,6 @@ assert 17 "foo = 6 + 11; foo;"
 assert 17 "bar = 6; foo = bar + 11; foo;"
 assert 17 "bar = 1; foo = bar + 16; return foo;"
 assert 2 "if (2 > 1) 2;"
+assert 3 "if (2 < 1) 2; else 3;"
 
 echo OK
