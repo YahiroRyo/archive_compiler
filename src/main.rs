@@ -91,7 +91,6 @@ struct LVar{
 enum TokenKind {
   RESERVED(String),
   IDENT(String),
-  RETURN,
   NUM(i64),
   EOF,
 }
@@ -194,6 +193,7 @@ enum NodeKind {
   LVAR(LVar), // local variables
   NUM(i64), // number
   IF,
+  ELSE,
   RETURN, // return
 }
 struct Node {
@@ -203,7 +203,9 @@ struct Node {
 }
 /// # トークン解析
 /// program    = stmt*
-/// stmt       = expr ";" | "return" expr ";"
+/// stmt       = expr ";"
+///            | "if" "(" expr ")" stmt ("else" stmt)?
+///            | "return" expr ";"
 /// expr       = assign
 /// assign     = equality ("=" assign)?
 /// equality   = relational ("==" relational | "!=" relational)*
@@ -353,27 +355,20 @@ impl NodeArray {
   fn stmt(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
     let mut index = 0;
 
-    match &toks.tokens[toks.index].kind {
-      TokenKind::RESERVED(s) => {
-        if s == "if" {
-          toks.index += 1;
-          toks.expect("(");
-          let lhs = self.expr(toks, lvars);
-          toks.expect(")");
-          let rhs = self.stmt(toks, lvars);
-          return self.new_node(NodeKind::IF, lhs, rhs);
-        }
-      },
-      TokenKind::RETURN => {
-        toks.index += 1;
-        let lhs = self.expr(toks, lvars);
-        index = self.new_node_only_lhs(NodeKind::RETURN, lhs);
-      },
-      _ => {
-        index = self.expr(toks, lvars);
-      }
+    if toks.consume("if") {
+      toks.expect("(");
+      let lhs = self.expr(toks, lvars);
+      toks.expect(")");
+      let rhs = self.stmt(toks, lvars);
+      return self.new_node(NodeKind::IF, lhs, rhs);
     }
-
+    if toks.consume("return") {
+      let lhs = self.expr(toks, lvars);
+      index = self.new_node_only_lhs(NodeKind::RETURN, lhs);
+    } else {
+      index = self.expr(toks, lvars);
+    }
+    
     if !toks.consume(";") {
       error(String::from("';'ではないトークンです"));
     }
@@ -539,7 +534,7 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
     // return
     if p.token_cmp("return") && !p.is_alnum(p.code[p.index + 6]) {
       toks.tokens.push(Token {
-        kind: TokenKind::RETURN,
+        kind: TokenKind::RESERVED(String::from("return")),
       });
       p.index += 6;
       continue;
