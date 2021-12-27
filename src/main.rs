@@ -16,13 +16,15 @@ struct Pointer {
   index: usize,
 }
 impl Pointer {
-  const ACCEPT_TOKENS: [&'static str; 13] = [
+  const ACCEPT_TOKENS: [&'static str; 15] = [
     "+",
     "-",
     "*",
     "/",
     "(",
     ")",
+    "{",
+    "}",
     "=",
     "==",
     ">",
@@ -192,8 +194,10 @@ enum NodeKind {
   ASSIGN, // =
   LVAR(LVar), // local variables
   NUM(i64), // number
-  IF,
-  ELSE,
+  IF, // if
+  ELSE, // else
+  WHILE,  // while
+  FOR,  // for
   RETURN, // return
   NONE,
 }
@@ -202,11 +206,14 @@ struct Node {
   lhs: Option<usize>,
   rhs: Option<usize>,
 }
+
 /// # トークン解析
 /// program    = stmt*
 /// stmt       = expr ";"
 ///            | "if" "(" expr ")" stmt ("else" stmt)?
+///            | "while" "(" expr ")" stmt
 ///            | "return" expr ";"
+///            | "for" "(" expr ";" expr ";" expr ")" stmt
 /// expr       = assign
 /// assign     = equality ("=" assign)?
 /// equality   = relational ("==" relational | "!=" relational)*
@@ -216,7 +223,7 @@ struct Node {
 /// unary      = ("+" | "-")? primary
 /// primary    = num | ident | "(" expr ")"
 struct NodeArray {
-  nodes: Vec<Node>
+  nodes: Vec<Node>,
 }
 impl NodeArray {
   fn index(&mut self) -> usize {
@@ -269,7 +276,7 @@ impl NodeArray {
       }
     }
   }
-  fn gen(&mut self, index: usize) {
+  fn gen(&mut self, index: usize, cnt: &mut u64) {
     match &self.nodes[index].kind {
       NodeKind::NUM (n) => {
         println!("  push {}", n);
@@ -284,7 +291,7 @@ impl NodeArray {
       },
       NodeKind::ASSIGN => {
         self.gen_lval(self.nodes[index].lhs.unwrap());
-        self.gen(self.nodes[index].rhs.unwrap());
+        self.gen(self.nodes[index].rhs.unwrap(), cnt);
 
         println!("  pop rdi");
         println!("  pop rax");
@@ -293,7 +300,7 @@ impl NodeArray {
         return;
       },
       NodeKind::RETURN => {
-        self.gen(self.nodes[index].lhs.unwrap());
+        self.gen(self.nodes[index].lhs.unwrap(), cnt);
         println!("  pop rax");
         println!("  mov rsp, rbp");
         println!("  pop rbp");
@@ -301,32 +308,63 @@ impl NodeArray {
         return;
       },
       NodeKind::IF => {
+        *cnt += 1;
+        let tmp_cnt = cnt.clone();
         let if_node = self.nodes[index].lhs.unwrap();
         let else_node = self.nodes[index].rhs;
-        self.gen(self.nodes[if_node].lhs.unwrap());
+        self.gen(self.nodes[if_node].lhs.unwrap(), cnt);
         println!("  pop rax");
         println!("  cmp rax, 0");
         if else_node != None {
-          println!("  je  .Lelsexxx");
-          self.gen(self.nodes[if_node].rhs.unwrap());
-          println!("  jmp .Lendxxx");
-          println!(".Lelsexxx:");
+          println!("  je  .Lelse{}", tmp_cnt);
+          self.gen(self.nodes[if_node].rhs.unwrap(), cnt);
+          println!("  jmp .Lend{}", tmp_cnt);
+          println!(".Lelse{}:", tmp_cnt);
           let else_node_lhs = self.nodes[else_node.unwrap()].lhs.unwrap();
-          self.gen(else_node_lhs);
+          self.gen(else_node_lhs, cnt);
         } else {
-          println!("  je  .Lendxxx");
-          self.gen(self.nodes[if_node].rhs.unwrap());
+          println!("  je  .Lend{}", tmp_cnt);
+          self.gen(self.nodes[if_node].rhs.unwrap(), cnt);
         }
-        println!(".Lendxxx:");
+        println!(".Lend{}:", cnt);
         return;
-      }
+      },
+      NodeKind::WHILE => {
+        *cnt += 1;
+        let tmp_cnt = cnt.clone();
+        println!(".Lbegin{}:", tmp_cnt);
+        self.gen(self.nodes[index].lhs.unwrap(), cnt);
+        println!("  pop rax");
+        println!("  cmp rax, 0");
+        println!("  je .Lend{}", tmp_cnt);
+        self.gen(self.nodes[index].rhs.unwrap(), cnt);
+        println!("  jmp .Lbegin{}", tmp_cnt);
+        println!(".Lend{}:", tmp_cnt);
+        return;
+      },
+      NodeKind::FOR => {
+        *cnt += 1;
+        let tmp_cnt = cnt.clone();
+        let expr_lhs = self.nodes[index].lhs.unwrap();
+        let tmp_lhs = self.nodes[expr_lhs].lhs.unwrap();
+        self.gen(self.nodes[tmp_lhs].lhs.unwrap(), cnt);
+        println!(".Lbegin{}:", tmp_cnt);
+        self.gen(self.nodes[tmp_lhs].rhs.unwrap(), cnt);
+        println!("  pop rax");
+        println!("  cmp rax, 0");
+        println!("  je .Lend{}", tmp_cnt);
+        self.gen(self.nodes[index].rhs.unwrap(), cnt);
+        self.gen(self.nodes[expr_lhs].rhs.unwrap(), cnt);
+        println!("  jmp .Lbegin{}", tmp_cnt);
+        println!(".Lend{}:", tmp_cnt);
+      },
       NodeKind::ELSE => return,
       NodeKind::NONE => return,
       _ => ()
     }
 
-    self.gen(self.nodes[index].lhs.unwrap());
-    self.gen(self.nodes[index].rhs.unwrap());
+    self.gen(self.nodes[index].lhs.unwrap(), cnt);
+    self.gen(self.nodes[index].rhs.unwrap(), cnt);
 
     println!("  pop rdi");
     println!("  pop rax");
@@ -367,7 +405,7 @@ NodeArray トークン解析
 */
 impl NodeArray {
   fn stmt(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
-    let mut index = 0;
+    let index;
 
     if toks.consume("if") {
       toks.expect("(");
@@ -382,7 +420,35 @@ impl NodeArray {
       }
       return self.new_node_only_lhs(NodeKind::IF, lhs);
     }
+
+    if toks.consume("while") {
+      toks.expect("(");
+      let lhs = self.expr(toks, lvars);
+      toks.expect(")");
+      let rhs = self.stmt(toks, lvars);
+      return self.new_node(NodeKind::WHILE, lhs, rhs);
+    }
+
+    if toks.consume("for") {
+      toks.expect("(");
+      let expr_lhs = self.expr(toks, lvars);
+      toks.expect(";");
+      let expr_rhs = self.expr(toks, lvars);
+      toks.expect(";");
+      let tmp_lhs = self.new_node(NodeKind::NONE, expr_lhs, expr_rhs);
+      let tmp_rhs = self.expr(toks, lvars);
+      let lhs = self.new_node(NodeKind::NONE, tmp_lhs, tmp_rhs);
+      toks.expect(")");
+      let rhs = self.stmt(toks, lvars);
+      
+      return self.new_node(NodeKind::FOR, lhs, rhs);
+    }
     
+    if toks.consume("{") {
+      index = self.stmt(toks, lvars);
+      toks.expect("}");
+      return index;
+    }
     if toks.consume("return") {
       let lhs = self.expr(toks, lvars);
       index = self.new_node_only_lhs(NodeKind::RETURN, lhs);
@@ -535,8 +601,8 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
     index: 0,
   };
   while !p.is_out() {
-    // 空白
-    if p.c() == ' ' {
+    // 空白か改行
+    if p.c() == ' ' || p.c() == '\n' {
       p.index += 1;
       continue;
     }
@@ -568,6 +634,7 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
       p.index += 2;
       continue;
     }
+    // else
     if p.token_cmp("else") {
       toks.tokens.push(Token {
         kind: TokenKind::RESERVED(String::from("else")),
@@ -575,7 +642,23 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
       p.index += 4;
       continue;
     }
-    // 変数
+    // while
+    if p.token_cmp("while") {
+      toks.tokens.push(Token {
+        kind: TokenKind::RESERVED(String::from("while")),
+      });
+      p.index += 5;
+      continue;
+    }
+    // for
+    if p.token_cmp("for") {
+      toks.tokens.push(Token {
+        kind: TokenKind::RESERVED(String::from("for")),
+      });
+      p.index += 3;
+      continue;
+    }
+      // 変数
     if p.c() >= 'a' && p.c() <= 'z' {
       let mut r = String::from("");
       loop {
@@ -626,6 +709,7 @@ fn main() {
   let mut tokens = tokenize(&mut p);
   let mut code: Vec<NodeArray> = Vec::new();
   let mut lvars: Vec<LVar> = Vec::new();
+  let mut cnt: u64 = 0;
   while !tokens.at_eof() {
     code.push(NodeArray {
       nodes: Vec::new(),
@@ -642,7 +726,7 @@ fn main() {
 
   for mut line in code {
     let len = line.nodes.len() - 1;
-    line.gen(len);
+    line.gen(len, &mut cnt);
 
     println!("  pop rax");
   }

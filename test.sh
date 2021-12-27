@@ -38,5 +38,18 @@ assert 17 "bar = 6; foo = bar + 11; foo;"
 assert 17 "bar = 1; foo = bar + 16; return foo;"
 assert 2 "if (2 > 1) 2;"
 assert 3 "if (2 < 1) 2; else 3;"
+assert 5 "foo = 0; while (foo < 5) foo = foo + 1;"
+assert 6 "for (i = 0; i < 6; i = i + 1) i;"
+assert 11 "foo = 0; for (i = 0; i < 10; i = i + 1) foo = foo + 1; foo;"
+assert 11 "a = 0; for (i = 0; i < 10; i = i + 1) { a = a + 1; } a;";
+assert 100 "
+foo = 0;
+for (i = 0; i < 9; i = i + 1) {
+  for (j = 0; j < 9; j = j + 1) {
+    foo = foo + 1;
+  }
+}
+foo;
+"
 
 echo OK
