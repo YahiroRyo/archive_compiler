@@ -16,7 +16,7 @@ struct Pointer {
   index: usize,
 }
 impl Pointer {
-  const ACCEPT_TOKENS: [&'static str; 15] = [
+  const ACCEPT_TOKENS: [&'static str; 16] = [
     "+",
     "-",
     "*",
@@ -25,6 +25,7 @@ impl Pointer {
     ")",
     "{",
     "}",
+    ",",
     "=",
     "==",
     ">",
@@ -166,6 +167,21 @@ impl TokenArray {
     self.index += 1;
     (false, 0)
   }
+  fn find_fns(&mut self, fns: &mut Vec<String>) -> (bool, usize) {
+    match &self.tokens[self.index].kind {
+      TokenKind::IDENT(s) => {
+        for i in 0..fns.len() {
+          if s.to_string() == fns[i] {
+            self.index += 1;
+            return (true, i);
+          }
+        }
+      },
+      _ => ()
+    }
+    self.index += 1;
+    (false, 0)
+  }
   fn at_eof(&mut self) -> bool {
     match &self.tokens[self.index].kind {
       TokenKind::EOF => {
@@ -199,6 +215,7 @@ enum NodeKind {
   WHILE,  // while
   FOR,  // for
   RETURN, // return
+  FUNC(String), // function
   NONE,
 }
 struct Node {
@@ -221,7 +238,9 @@ struct Node {
 /// add        = mul ("+" mul | "-" mul)*
 /// mul        = unary ("*" unary | "/" unary)*
 /// unary      = ("+" | "-")? primary
-/// primary    = num | ident | "(" expr ")"
+/// primary    = num
+///              | ident ("(" ")")?
+///              | "(" expr ")"
 struct NodeArray {
   nodes: Vec<Node>,
 }
@@ -358,6 +377,13 @@ impl NodeArray {
         println!("  jmp .Lbegin{}", tmp_cnt);
         println!(".Lend{}:", tmp_cnt);
       },
+      NodeKind::FUNC (name) => {
+        if name == "print" {
+          self.gen(self.nodes[index].lhs.unwrap(), cnt);
+          println!("  call .print");
+          return;
+        }
+      },
       NodeKind::ELSE => return,
       NodeKind::NONE => return,
       _ => ()
@@ -404,17 +430,17 @@ impl NodeArray {
 NodeArray トークン解析
 */
 impl NodeArray {
-  fn stmt(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
+  fn stmt(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize {
     let index;
 
     if toks.consume("if") {
       toks.expect("(");
-      let none_lhs = self.expr(toks, lvars);
+      let none_lhs = self.expr(toks, lvars, fns);
       toks.expect(")");
-      let none_rhs = self.stmt(toks, lvars);
+      let none_rhs = self.stmt(toks, lvars, fns);
       let lhs = self.new_node(NodeKind::NONE, none_lhs, none_rhs);
       if toks.consume("else") {
-        let else_lhs = self.stmt(toks, lvars);
+        let else_lhs = self.stmt(toks, lvars, fns);
         let rhs = self.new_node_only_lhs(NodeKind::ELSE, else_lhs);
         return self.new_node(NodeKind::IF, lhs, rhs);
       }
@@ -423,37 +449,37 @@ impl NodeArray {
 
     if toks.consume("while") {
       toks.expect("(");
-      let lhs = self.expr(toks, lvars);
+      let lhs = self.expr(toks, lvars, fns);
       toks.expect(")");
-      let rhs = self.stmt(toks, lvars);
+      let rhs = self.stmt(toks, lvars, fns);
       return self.new_node(NodeKind::WHILE, lhs, rhs);
     }
 
     if toks.consume("for") {
       toks.expect("(");
-      let expr_lhs = self.expr(toks, lvars);
+      let expr_lhs = self.expr(toks, lvars, fns);
       toks.expect(";");
-      let expr_rhs = self.expr(toks, lvars);
+      let expr_rhs = self.expr(toks, lvars, fns);
       toks.expect(";");
       let tmp_lhs = self.new_node(NodeKind::NONE, expr_lhs, expr_rhs);
-      let tmp_rhs = self.expr(toks, lvars);
+      let tmp_rhs = self.expr(toks, lvars, fns);
       let lhs = self.new_node(NodeKind::NONE, tmp_lhs, tmp_rhs);
       toks.expect(")");
-      let rhs = self.stmt(toks, lvars);
+      let rhs = self.stmt(toks, lvars, fns);
       
       return self.new_node(NodeKind::FOR, lhs, rhs);
     }
     
     if toks.consume("{") {
-      index = self.stmt(toks, lvars);
+      index = self.stmt(toks, lvars, fns);
       toks.expect("}");
       return index;
     }
     if toks.consume("return") {
-      let lhs = self.expr(toks, lvars);
+      let lhs = self.expr(toks, lvars, fns);
       index = self.new_node_only_lhs(NodeKind::RETURN, lhs);
     } else {
-      index = self.expr(toks, lvars);
+      index = self.expr(toks, lvars, fns);
     }
     
     if !toks.consume(";") {
@@ -461,123 +487,148 @@ impl NodeArray {
     }
     index
   }
-  fn expr(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
-    self.assign(toks, lvars)
+  fn expr(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize {
+    self.assign(toks, lvars, fns)
   }
-  fn assign(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
-    let mut index = self.equality(toks, lvars);
+  fn assign(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize {
+    let mut index = self.equality(toks, lvars, fns);
     if toks.consume("=") {
-      let rhs = self.assign(toks, lvars);
+      let rhs = self.assign(toks, lvars, fns);
       index = self.new_node(NodeKind::ASSIGN, index, rhs);
     }
     index
   }
-  fn equality(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize{
-    let mut index = self.relational(toks, lvars);
+  fn equality(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize{
+    let mut index = self.relational(toks, lvars, fns);
 
     loop {
       if toks.consume("==") {
-        let rhs = self.relational(toks, lvars);
+        let rhs = self.relational(toks, lvars, fns);
         index = self.new_node(NodeKind::EQ, index, rhs);
       } else if toks.consume("!=") {
-        let rhs = self.relational(toks, lvars);
+        let rhs = self.relational(toks, lvars, fns);
         index = self.new_node(NodeKind::NE, index, rhs);
       } else {
         return index
       }
     }
   }
-  fn relational(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
-    let mut index = self.add(toks, lvars);
+  fn relational(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize {
+    let mut index = self.add(toks, lvars, fns);
 
     loop {
       if toks.consume("<") {
-        let rhs = self.add(toks, lvars);
+        let rhs = self.add(toks, lvars, fns);
         index = self.new_node(NodeKind::LT, index, rhs);
       } else if toks.consume("<=") {
-        let rhs = self.add(toks, lvars);
+        let rhs = self.add(toks, lvars, fns);
         index = self.new_node(NodeKind::LE, index, rhs);
       } else if toks.consume(">") {
-        let rhs = self.add(toks, lvars);
+        let rhs = self.add(toks, lvars, fns);
         index = self.new_node(NodeKind::LT, rhs, index);
       } else if toks.consume(">=") {
-        let rhs = self.add(toks, lvars);
+        let rhs = self.add(toks, lvars, fns);
         index = self.new_node(NodeKind::LE, rhs, index);
       } else {
         return index;
       }
     }
   }
-  fn add(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
-    let mut index = self.mul(toks, lvars);
+  fn add(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize {
+    let mut index = self.mul(toks, lvars, fns);
 
     loop {
       if toks.consume("+") {
-        let rhs = self.mul(toks, lvars);
+        let rhs = self.mul(toks, lvars, fns);
         index = self.new_node(NodeKind::ADD, index, rhs);
       } else if toks.consume("-") {
-        let rhs = self.mul(toks, lvars);
+        let rhs = self.mul(toks, lvars, fns);
         index = self.new_node(NodeKind::SUB, index, rhs);
       } else {
         return index;
       }
     }
   }
-  fn mul(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
-    let mut index = self.unary(toks, lvars);
+  fn mul(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize {
+    let mut index = self.unary(toks, lvars, fns);
 
     loop {
       if toks.consume("*") {
-        let rhs = self.unary(toks, lvars);
+        let rhs = self.unary(toks, lvars, fns);
         index = self.new_node(NodeKind::MUL, index, rhs);
       } else if toks.consume("/") {
-        let rhs = self.unary(toks, lvars);
+        let rhs = self.unary(toks, lvars, fns);
         index = self.new_node(NodeKind::DIV, index, rhs);
       } else {
         return index;
       }
     }
   }
-  fn unary(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize {
+  fn unary(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize {
     if toks.consume("+") {
-      return self.primary(toks, lvars);
+      return self.primary(toks, lvars, fns);
     }
     if toks.consume("-") {
       let lhs = self.new_node_num(0);
-      let rhs = self.primary(toks, lvars);
+      let rhs = self.primary(toks, lvars, fns);
       return self.new_node(NodeKind::SUB, lhs, rhs);
     }
-    self.primary(toks, lvars)
+    self.primary(toks, lvars, fns)
   }
-  fn primary(&mut self,  toks: &mut TokenArray, lvars: &mut Vec<LVar>) -> usize{
+  fn primary(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize{
     let (is_ident, s) = toks.consume_ident();
     if is_ident {
-      toks.index -= 1;
-      let (is_exist, index) = toks.find_lvar(lvars);
-      if is_exist {
-        // すでに存在する
-        self.new_node_lvar(s, lvars[index].offset);
-      } else {
-        // 存在しない
-        let tmp = s.clone();
-        if lvars.len() == 0 {
-          self.new_node_lvar(s, 8);
-          lvars.push(LVar {
-            name: tmp,
-            offset: 8,
-          });
+      if toks.consume("(") {
+        // 関数
+        toks.index -= 2;
+        let (is_exist, index) = toks.find_fns(fns);
+        if is_exist {
+          if fns[index] == "print" {
+            toks.index += 1;
+            let (lvar_index_is_exist, lvar_index) = toks.find_lvar(lvars);
+            if !lvar_index_is_exist {
+              error(String::from("定義されていない変数です。"));
+            }
+            let lhs = self.new_node_lvar(s, lvars[lvar_index].offset);
+            toks.index += 1;
+            return self.new_node_only_lhs(NodeKind::FUNC(String::from("print")), lhs);
+          } else {
+
+          }
         } else {
-          self.new_node_lvar(s, lvars[lvars.len() - 1].offset + 8);
-          lvars.push(LVar {
-            name: tmp,
-            offset: lvars[lvars.len() - 1].offset + 8,
-          });
+          error(String::from("定義されていない関数です。"));
         }
+        toks.expect(")");
+        return 0;
+      } else {
+        toks.index -= 1;
+        // 変数
+        let (is_exist, index) = toks.find_lvar(lvars);
+        if is_exist {
+          // すでに存在する
+          self.new_node_lvar(s, lvars[index].offset);
+        } else {
+          // 存在しない
+          let tmp = s.clone();
+          if lvars.len() == 0 {
+            self.new_node_lvar(s, 8);
+            lvars.push(LVar {
+              name: tmp,
+              offset: 8,
+            });
+          } else {
+            self.new_node_lvar(s, lvars[lvars.len() - 1].offset + 8);
+            lvars.push(LVar {
+              name: tmp,
+              offset: lvars[lvars.len() - 1].offset + 8,
+            });
+          }
+        }
+        return self.index();
       }
-      return self.index();
     }
     if toks.consume("(") {
-      self.expr(toks, lvars);
+      self.expr(toks, lvars, fns);
       toks.expect(")");
       return self.index();
     }
@@ -689,7 +740,10 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
   });
   toks
 }
-
+fn print_funcs() {
+  println!(".print:");
+  println!("  ret");
+}
 fn main() {
   let args: Vec<String> = env::args().collect();
   if args.len() != 2 {
@@ -709,16 +763,18 @@ fn main() {
   let mut tokens = tokenize(&mut p);
   let mut code: Vec<NodeArray> = Vec::new();
   let mut lvars: Vec<LVar> = Vec::new();
+  let mut fns: Vec<String> = vec![String::from("print")];
   let mut cnt: u64 = 0;
   while !tokens.at_eof() {
     code.push(NodeArray {
       nodes: Vec::new(),
     });
     let code_len = code.len() - 1;
-    code[code_len].stmt(&mut tokens, &mut lvars);
+    code[code_len].stmt(&mut tokens, &mut lvars, &mut fns);
   }
   println!(".intel_syntax noprefix");
   println!(".globl main");
+  print_funcs();
   println!("main:");
   println!("  push rbp");
   println!("  mov rbp, rsp");

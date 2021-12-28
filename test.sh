@@ -51,5 +51,5 @@ for (i = 0; i < 9; i = i + 1) {
 }
 foo;
 "
-
+assert 12 "foo = 11; print(foo);"
 echo OK
