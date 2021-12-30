@@ -378,9 +378,9 @@ impl NodeArray {
         println!(".Lend{}:", tmp_cnt);
       },
       NodeKind::FUNC (name) => {
-        if name == "print" {
-          self.gen(self.nodes[index].lhs.unwrap(), cnt);
-          println!("  call .print");
+        if name == "write" {
+          self.gen_lval(self.nodes[index].lhs.unwrap());
+          println!("  call .write");
           return;
         }
       },
@@ -583,7 +583,7 @@ impl NodeArray {
         toks.index -= 2;
         let (is_exist, index) = toks.find_fns(fns);
         if is_exist {
-          if fns[index] == "print" {
+          if fns[index] == "write" {
             toks.index += 1;
             let (lvar_index_is_exist, lvar_index) = toks.find_lvar(lvars);
             if !lvar_index_is_exist {
@@ -591,7 +591,7 @@ impl NodeArray {
             }
             let lhs = self.new_node_lvar(s, lvars[lvar_index].offset);
             toks.index += 1;
-            return self.new_node_only_lhs(NodeKind::FUNC(String::from("print")), lhs);
+            return self.new_node_only_lhs(NodeKind::FUNC(String::from("write")), lhs);
           } else {
 
           }
@@ -634,6 +634,34 @@ impl NodeArray {
     }
     self.new_node_num(toks.expect_number());
     self.index()
+  }
+}
+
+struct Func {}
+impl Func {
+  fn exit(&mut self) {
+    println!(".exit:");
+    println!("  mov rax, 60");
+    println!("  syscall");
+    println!("  ret");
+  }
+  fn write(&mut self) {
+    println!(".write:");
+    println!("  pop rbp");
+    println!("  pop rsi");
+    println!("  mov rbx, 0x30");
+    println!("  add [rsi], rbx");
+    println!("  mov rax, 1");
+    println!("  mov rdi, 1");
+    println!("  mov rdx, 1");
+    println!("  syscall");
+    println!("  call .exit");
+    println!("  push rbp");
+    println!("  ret");
+  }
+  fn main(&mut self) {
+    self.exit();
+    self.write();
   }
 }
 
@@ -740,9 +768,9 @@ fn tokenize(p: &mut Pointer) -> TokenArray {
   });
   toks
 }
-fn print_funcs() {
-  println!(".print:");
-  println!("  ret");
+fn funcs() {
+  let mut func = Func {};
+  func.main();
 }
 fn main() {
   let args: Vec<String> = env::args().collect();
@@ -763,7 +791,7 @@ fn main() {
   let mut tokens = tokenize(&mut p);
   let mut code: Vec<NodeArray> = Vec::new();
   let mut lvars: Vec<LVar> = Vec::new();
-  let mut fns: Vec<String> = vec![String::from("print")];
+  let mut fns: Vec<String> = vec![String::from("write")];
   let mut cnt: u64 = 0;
   while !tokens.at_eof() {
     code.push(NodeArray {
@@ -774,7 +802,7 @@ fn main() {
   }
   println!(".intel_syntax noprefix");
   println!(".globl main");
-  print_funcs();
+  funcs();
   println!("main:");
   println!("  push rbp");
   println!("  mov rbp, rsp");

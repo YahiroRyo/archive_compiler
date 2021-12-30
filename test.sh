@@ -2,13 +2,21 @@
 assert() {
   expected="$1"
   input="$2"
+  is_write="$3"
 
   cargo run "$input" > tmp.s
-  cc -o tmp tmp.s
-  ./tmp
+  cc -no-pie -o tmp tmp.s
+  result=$(./tmp)
   actual="$?"
 
-  if [ "$actual" = "$expected" ]; then
+  if [ "$is_write" == "true" ]; then
+    if [ "$result" = "$expected" ]; then
+      echo "$input => $result"
+    else
+      echo "$input => $expected expected, but got $result"
+      exit 1
+    fi
+  elif [ "$actual" = "$expected" ]; then
     echo "$input => $actual"
   else
     echo "$input => $expected expected, but got $actual"
@@ -51,5 +59,5 @@ for (i = 0; i < 9; i = i + 1) {
 }
 foo;
 "
-assert 12 "foo = 11; print(foo);"
+assert 3 "foo = 3; write(foo);" true
 echo OK
