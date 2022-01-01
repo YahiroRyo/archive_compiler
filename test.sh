@@ -1,5 +1,6 @@
 #!/bin/bash
 assert() {
+  echo "========================================="
   expected="$1"
   input="$2"
   is_write="$3"
@@ -59,5 +60,20 @@ for (i = 0; i < 9; i = i + 1) {
 }
 foo;
 "
+assert 55 "
+foo = 0;
+bar = 0;
+for (i = 0; i < 9; i = i + 1) {
+  foo = foo + 1;
+  bar = bar + foo;
+}
+bar;
+"
 assert 12 "foo = 12; print(foo);" true
+assert 110110110110110110110110110 "
+foo = 110;
+for (i = 0; i < 9; i = i + 1) {
+  print(foo);
+}
+" true
 echo OK

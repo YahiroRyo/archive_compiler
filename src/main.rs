@@ -193,6 +193,11 @@ impl TokenArray {
   }
 }
 
+struct Range {
+  from: usize,
+  to: usize,
+}
+
 //  //////////////////////////////////////////////////////////////////
 //  
 //  node
@@ -215,6 +220,7 @@ enum NodeKind {
   WHILE,  // while
   FOR,  // for
   RETURN, // return
+  BLOCK(Range), // {}
   FUNC(String), // function
   NONE,
 }
@@ -227,6 +233,7 @@ struct Node {
 /// # トークン解析
 /// program    = stmt*
 /// stmt       = expr ";"
+///            | "{" stmt "}"
 ///            | "if" "(" expr ")" stmt ("else" stmt)?
 ///            | "while" "(" expr ")" stmt
 ///            | "return" expr ";"
@@ -385,6 +392,12 @@ impl NodeArray {
           return;
         }
       },
+      NodeKind::BLOCK (r) => {
+        for i in r.from..r.to+1 {
+          self.gen(i, cnt);
+        }
+        return;
+      },
       NodeKind::ELSE => return,
       NodeKind::NONE => return,
       _ => ()
@@ -472,8 +485,15 @@ impl NodeArray {
     }
     
     if toks.consume("{") {
-      index = self.stmt(toks, lvars, fns);
-      toks.expect("}");
+      let from = self.stmt(toks, lvars, fns);
+      let mut to = from;
+      while !toks.consume("}") {
+        to = self.stmt(toks, lvars, fns);
+      }
+      index = self.new_node(NodeKind::BLOCK(Range {
+        from: from,
+        to: to,
+      }), 0, 0);
       return index;
     }
     if toks.consume("return") {
@@ -691,6 +711,7 @@ impl Func {
   }
   fn print(&mut self) {
     println!(".print:");
+    println!("  mov r15, [rax]");
     println!("  call .to_string");
     println!(".Lprint:");
     println!("  call .write");
@@ -698,6 +719,7 @@ impl Func {
     println!("  mov rbx, [rax]");
     println!("  cmp rbx, 0x00");
     println!("  jne .Lprint");
+    println!("  mov [rax], r15");
     println!("  ret");
   }
   fn write(&mut self) {
