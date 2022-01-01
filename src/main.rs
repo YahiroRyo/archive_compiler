@@ -378,9 +378,10 @@ impl NodeArray {
         println!(".Lend{}:", tmp_cnt);
       },
       NodeKind::FUNC (name) => {
-        if name == "write" {
+        if name == "print" {
           self.gen_lval(self.nodes[index].lhs.unwrap());
-          println!("  call .write");
+          println!("  pop rax");
+          println!("  call .print");
           return;
         }
       },
@@ -583,7 +584,7 @@ impl NodeArray {
         toks.index -= 2;
         let (is_exist, index) = toks.find_fns(fns);
         if is_exist {
-          if fns[index] == "write" {
+          if fns[index] == "print" {
             toks.index += 1;
             let (lvar_index_is_exist, lvar_index) = toks.find_lvar(lvars);
             if !lvar_index_is_exist {
@@ -591,7 +592,7 @@ impl NodeArray {
             }
             let lhs = self.new_node_lvar(s, lvars[lvar_index].offset);
             toks.index += 1;
-            return self.new_node_only_lhs(NodeKind::FUNC(String::from("write")), lhs);
+            return self.new_node_only_lhs(NodeKind::FUNC(String::from("print")), lhs);
           } else {
 
           }
@@ -641,26 +642,79 @@ struct Func {}
 impl Func {
   fn exit(&mut self) {
     println!(".exit:");
+    println!("  pop rdi");
     println!("  mov rax, 60");
     println!("  syscall");
     println!("  ret");
   }
+  fn get_digit(&mut self) {
+    println!(".get_digit:");
+    println!("  pop rbp");
+    println!("  pop rax");
+    println!("  mov rbx, 0");
+    println!("  mov rcx, 10");
+    println!("  mov rdx, 0");
+    println!(".Lget_digit:");
+    println!("  add rbx, 1");
+    println!("  div rcx");
+    println!("  cmp rax, 1");
+    println!("  jae .Lget_digit");
+    println!("  push rbx");
+    println!("  push rbp");
+    println!("  ret");
+  }
+  fn to_string(&mut self) {
+    println!(".to_string:");
+    println!("  mov rsi, rax");
+    println!("  mov rax, [rsi]");
+    println!("  mov rbx, 0x00");
+    println!("  mov [rsi], rbx");
+    println!("  sub rsi, 8");
+    println!("  mov rbx, 0x30");
+    println!("  cmp rax, 10");
+    println!("  jb .Lendto_string");
+    println!("  mov rcx, 10");
+    println!("  mov rdx, 0");
+    println!(".Lto_string:");
+    println!("  div rcx");
+    println!("  add rdx, rbx");
+    println!("  mov [rsi], rdx");
+    println!("  sub rsi, 8");
+    println!("  mov rdx, 0");
+    println!("  cmp rax, 10");
+    println!("  jae .Lto_string");
+    println!(".Lendto_string:");
+    println!("  add rax, rbx");
+    println!("  mov [rsi], rax");
+    println!("  mov rax, rsi");
+    println!("  ret");
+  }
+  fn print(&mut self) {
+    println!(".print:");
+    println!("  call .to_string");
+    println!(".Lprint:");
+    println!("  call .write");
+    println!("  add rax, 8");
+    println!("  mov rbx, [rax]");
+    println!("  cmp rbx, 0x00");
+    println!("  jne .Lprint");
+    println!("  ret");
+  }
   fn write(&mut self) {
     println!(".write:");
-    println!("  pop rbp");
-    println!("  pop rsi");
-    println!("  mov rbx, 0x30");
-    println!("  add [rsi], rbx");
+    println!("  mov rsi, rax");
     println!("  mov rax, 1");
     println!("  mov rdi, 1");
     println!("  mov rdx, 1");
     println!("  syscall");
-    println!("  call .exit");
-    println!("  push rbp");
+    println!("  mov rax, rsi");
     println!("  ret");
   }
   fn main(&mut self) {
     self.exit();
+    self.get_digit();
+    self.print();
+    self.to_string();
     self.write();
   }
 }
@@ -791,7 +845,7 @@ fn main() {
   let mut tokens = tokenize(&mut p);
   let mut code: Vec<NodeArray> = Vec::new();
   let mut lvars: Vec<LVar> = Vec::new();
-  let mut fns: Vec<String> = vec![String::from("write")];
+  let mut fns: Vec<String> = vec![String::from("print")];
   let mut cnt: u64 = 0;
   while !tokens.at_eof() {
     code.push(NodeArray {

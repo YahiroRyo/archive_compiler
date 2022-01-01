@@ -1,6 +1,7 @@
 {
     "editor.tabSize": 2,
     "files.associations": {
-        "stat.h": "c"
+        "stat.h": "c",
+        "unistd.h": "c"
     }
 }

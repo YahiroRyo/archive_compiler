@@ -59,5 +59,5 @@ for (i = 0; i < 9; i = i + 1) {
 }
 foo;
 "
-assert 3 "foo = 3; write(foo);" true
+assert 12 "foo = 12; print(foo);" true
 echo OK
