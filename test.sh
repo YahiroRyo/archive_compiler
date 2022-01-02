@@ -49,9 +49,9 @@ assert 2 "if (2 > 1) 2;"
 assert 3 "if (2 < 1) 2; else 3;"
 assert 5 "foo = 0; while (foo < 5) foo = foo + 1;"
 assert 6 "for (i = 0; i < 6; i = i + 1) i;"
-assert 11 "foo = 0; for (i = 0; i < 10; i = i + 1) foo = foo + 1; foo;"
-assert 11 "a = 0; for (i = 0; i < 10; i = i + 1) { a = a + 1; } a;";
-assert 100 "
+assert 10 "foo = 0; for (i = 0; i < 10; i = i + 1) foo = foo + 1; foo;"
+assert 10 "a = 0; for (i = 0; i < 10; i = i + 1) { a = a + 1; } a;";
+assert 81 "
 foo = 0;
 for (i = 0; i < 9; i = i + 1) {
   for (j = 0; j < 9; j = j + 1) {
@@ -60,7 +60,7 @@ for (i = 0; i < 9; i = i + 1) {
 }
 foo;
 "
-assert 55 "
+assert 45 "
 foo = 0;
 bar = 0;
 for (i = 0; i < 9; i = i + 1) {
@@ -70,10 +70,9 @@ for (i = 0; i < 9; i = i + 1) {
 bar;
 "
 assert 12 "foo = 12; print(foo);" true
-assert 110110110110110110110110110 "
-foo = 110;
+assert 100100100100100100100100100 "
 for (i = 0; i < 9; i = i + 1) {
-  print(foo);
+  print(100);
 }
 " true
 echo OK

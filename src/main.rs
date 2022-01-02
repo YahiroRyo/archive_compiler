@@ -1,9 +1,24 @@
+extern crate rand;
+use rand::Rng;
 use std::env;
 use std::process;
 
 fn error(s: String) {
   eprintln!("{}", s);
   process::exit(1);
+}
+
+fn generate_rand_str(num: usize) -> String {
+  let mut alphabet_vec: Vec<char> = vec![];
+  // 5文字のランダムな文字列を生成しています
+  for _num in 1..num+1 {
+    // Unicodeのコードポイントのために、97から122の乱数を発生させています
+    let rand_num = rand::thread_rng().gen_range(97, 123);
+    if let Some(rand_num) = std::char::from_u32(rand_num) {
+      alphabet_vec.push(rand_num);
+    }
+  }
+  alphabet_vec.iter().collect::<String>()
 }
 
 //  //////////////////////////////////////////////////////////////////
@@ -383,14 +398,23 @@ impl NodeArray {
         self.gen(self.nodes[expr_lhs].rhs.unwrap(), cnt);
         println!("  jmp .Lbegin{}", tmp_cnt);
         println!(".Lend{}:", tmp_cnt);
+        return;
       },
       NodeKind::FUNC (name) => {
         if name == "print" {
-          self.gen_lval(self.nodes[index].lhs.unwrap());
+          match self.nodes[self.nodes[index].lhs.unwrap()].kind {
+            NodeKind::LVAR (_) => self.gen_lval(self.nodes[index].lhs.unwrap()),
+            NodeKind::ASSIGN => {
+              self.gen(self.nodes[index].lhs.unwrap(), cnt);
+              self.gen_lval(self.nodes[index].rhs.unwrap());
+            },
+            _ => ()
+          }
           println!("  pop rax");
           println!("  call .print");
           return;
         }
+        
       },
       NodeKind::BLOCK (r) => {
         for i in r.from..r.to+1 {
@@ -480,7 +504,6 @@ impl NodeArray {
       let lhs = self.new_node(NodeKind::NONE, tmp_lhs, tmp_rhs);
       toks.expect(")");
       let rhs = self.stmt(toks, lvars, fns);
-      
       return self.new_node(NodeKind::FOR, lhs, rhs);
     }
     
@@ -596,7 +619,7 @@ impl NodeArray {
     }
     self.primary(toks, lvars, fns)
   }
-  fn primary(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize{
+  fn primary(&mut self, toks: &mut TokenArray, lvars: &mut Vec<LVar>, fns: &mut Vec<String>) -> usize {
     let (is_ident, s) = toks.consume_ident();
     if is_ident {
       if toks.consume("(") {
@@ -606,20 +629,44 @@ impl NodeArray {
         if is_exist {
           if fns[index] == "print" {
             toks.index += 1;
-            let (lvar_index_is_exist, lvar_index) = toks.find_lvar(lvars);
-            if !lvar_index_is_exist {
-              error(String::from("定義されていない変数です。"));
+            let mut lhs = 0;
+            let mut rhs = 0;
+            match toks.tokens[toks.index].kind {
+              TokenKind::IDENT (_) => {
+                let (lvar_index_is_exist, lvar_index) = toks.find_lvar(lvars);
+                if !lvar_index_is_exist {
+                  error(String::from("定義されていない変数です。"));
+                }
+                lhs = self.new_node_lvar(s, lvars[lvar_index].offset);
+              },
+              TokenKind::NUM(n) => {
+                let s = generate_rand_str(64);
+                let tmp = s.clone();
+                let lvar_tmp = s.clone();
+                let offset;
+                if lvars.len() == 0 {
+                  offset = 8;
+                } else {
+                  offset = lvars[lvars.len() - 1].offset + 8;
+                }
+                let assign_lhs = self.new_node_lvar(s, offset);
+                let assign_rhs = self.new_node_num(n);
+                lhs = self.new_node(NodeKind::ASSIGN, assign_lhs, assign_rhs);
+                rhs = self.new_node_lvar(lvar_tmp, offset);
+                lvars.push(LVar {
+                  name: tmp,
+                  offset: offset,
+                });
+                toks.index += 1;
+              }
+              _ => ()
             }
-            let lhs = self.new_node_lvar(s, lvars[lvar_index].offset);
-            toks.index += 1;
-            return self.new_node_only_lhs(NodeKind::FUNC(String::from("print")), lhs);
-          } else {
-
+            toks.expect(")");
+            return self.new_node(NodeKind::FUNC(String::from("print")), lhs, rhs);
           }
         } else {
           error(String::from("定義されていない関数です。"));
         }
-        toks.expect(")");
         return 0;
       } else {
         toks.index -= 1;
